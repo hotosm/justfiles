@@ -7,7 +7,7 @@
 #     @curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/chart.just \
 #       -o {{justfile_directory()}}/tasks/chart.just;
 #     @just --justfile {{justfile_directory()}}/tasks/chart.just \
-#       --set chart_name={{chart_name}} {{args}}
+#       --set chart_name {{chart_name}} {{args}}
 
 # Chart name - override via --set chart_name=my-app
 chart_name := "chart"
