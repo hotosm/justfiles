@@ -1,3 +1,33 @@
+# Standalone justfile - intended to be invoked via:
+#   just --justfile prep.just <recipe>
+#
+# Upstream repos should use a thin dispatcher pattern:
+#   prep *args: _ensure-prep
+#     @just --justfile {{justfile_directory()}}/prep.just {{args}}
+#   [private]
+#   _ensure-prep:
+#     @if [ ! -f {{justfile_directory()}}/prep.just ]; then \
+#       curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/prep.just \
+#         -o {{justfile_directory()}}/prep.just; \
+#     fi
+
+_self := justfile()
+
+[private]
+[no-cd]
+_echo-red msg:
+  @printf '\033[0;31m%s\033[0m\n' '{{msg}}'
+
+[private]
+[no-cd]
+_echo-yellow msg:
+  @printf '\033[0;33m%s\033[0m\n' '{{msg}}'
+
+[private]
+[no-cd]
+_echo-blue msg:
+  @printf '\033[0;34m%s\033[0m\n' '{{msg}}'
+
 [no-cd]
 _curl:
   #!/usr/bin/env bash
@@ -8,28 +38,11 @@ _curl:
   sudo apt-get update
   sudo apt-get install --no-install-recommends -y curl ca-certificates
 
-# Install envsubst
-[no-cd]
-[no-exit-message]
-_envsubst: _curl
-  #!/usr/bin/env bash
-  echo
-  # Get a8m/envsubst (required for default vals syntax ${VAR:-default})
-  # Use local version, as envsubst may be installed on system already
-  if [ -f ./envsubst ]; then
-      echo "envsubst already exists. Continuing."
-  else
-      echo "Downloading a8m/envsubst"
-      echo
-      curl -L "https://github.com/a8m/envsubst/releases/download/v1.2.0/envsubst-$(uname -s)-$(uname -m)" -o envsubst
-      chmod +x envsubst
-  fi
-
 [no-cd]
 _get_arch:
   #!/usr/bin/env sh
   set -e
-  dpkg --print-architecture 
+  dpkg --print-architecture
 
 # Check the current user is not root
 [no-cd]
@@ -40,23 +53,23 @@ _check_not_root:
   echo "Current user:"
   echo "$(id)"
   if [ "$(id -u)" == 0 ]; then
-    just _echo-red "Currently logged in as root. Please login as a different user."
+    just --justfile {{_self}} _echo-red "Currently logged in as root. Please login as a different user."
     echo ""
-    just _echo-yellow "Create a new user and grant sudo privileges with:"
-    just _echo-yellow "    adduser myuser"
-    just _echo-yellow "    usermod -aG sudo myuser     # (use 'wheel' instead of 'sudo' on RHEL/Fedora)"
+    just --justfile {{_self}} _echo-yellow "Create a new user and grant sudo privileges with:"
+    just --justfile {{_self}} _echo-yellow "    adduser myuser"
+    just --justfile {{_self}} _echo-yellow "    usermod -aG sudo myuser     # (use 'wheel' instead of 'sudo' on RHEL/Fedora)"
     echo ""
-    just _echo-yellow "Then log in as that user with a full PAM session (not 'su -'):"
-    just _echo-yellow "First 'apt install systemd-container', then"
-    just _echo-yellow "    machinectl shell myuser@"
+    just --justfile {{_self}} _echo-yellow "Then log in as that user with a full PAM session (not 'su -'):"
+    just --justfile {{_self}} _echo-yellow "First 'apt install systemd-container', then"
+    just --justfile {{_self}} _echo-yellow "    machinectl shell myuser@"
     echo ""
-    just _echo-yellow "⚠️ Make sure to remove the user from sudoers when you're done."
-    just _echo-yellow "    usermod -rG sudo myuser"
+    just --justfile {{_self}} _echo-yellow "⚠️ Make sure to remove the user from sudoers when you're done."
+    just --justfile {{_self}} _echo-yellow "    usermod -rG sudo myuser"
 
     exit 1
   fi
 
-# Low level container runtime 
+# Low level container runtime
 [no-cd]
 _runc:
   #!/usr/bin/env bash
@@ -64,17 +77,17 @@ _runc:
   cd {{justfile_directory()}}
 
   if command -v runc &> /dev/null; then
-    just _echo-yellow "Binary 'runc' already installed"
+    just --justfile {{_self}} _echo-yellow "Binary 'runc' already installed"
     exit 0
   fi
 
-  just prep _curl
+  just --justfile {{_self}} _curl
 
   VERSION=1.3.0
-  ARCH=$(just prep _get_arch)
+  ARCH=$(just --justfile {{_self}} _get_arch)
   URL="https://github.com/opencontainers/runc/releases/download/v${VERSION}/runc.${ARCH}"
 
-  just _echo-blue "Installing low level container runtime: runc"
+  just --justfile {{_self}} _echo-blue "Installing low level container runtime: runc"
   sudo curl -SL "${URL}" -o /usr/local/bin/runc
   sudo chmod +x /usr/local/bin/runc
 
@@ -86,19 +99,19 @@ _nerdctl_containerd:
   cd {{justfile_directory()}}
 
   if command -v containerd &> /dev/null; then
-    just _echo-yellow "Binary 'containerd' already installed. Exiting."
+    just --justfile {{_self}} _echo-yellow "Binary 'containerd' already installed. Exiting."
     exit 0
   fi
   if command -v nerdctl &> /dev/null; then
-    just _echo-yellow "Binary 'nerdctl' already installed. Exiting."
+    just --justfile {{_self}} _echo-yellow "Binary 'nerdctl' already installed. Exiting."
     exit 0
   fi
 
-  just prep _curl
+  just --justfile {{_self}} _curl
 
-  just _echo-blue "Installing high level container runtime: containerd + nerdctl CLI"
+  just --justfile {{_self}} _echo-blue "Installing high level container runtime: containerd + nerdctl CLI"
   VERSION=2.2.1
-  ARCH=$(just prep _get_arch)
+  ARCH=$(just --justfile {{_self}} _get_arch)
   URL="https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
 
   TMP_DIR=$(mktemp -d)
@@ -110,7 +123,7 @@ _nerdctl_containerd:
 _containerd_rootless:
   #!/usr/bin/env bash
   set -euo pipefail
-  just _echo-blue "Converting containerd --> rootless install"
+  just --justfile {{_self}} _echo-blue "Converting containerd --> rootless install"
 
   # uidmap is needed for 'newuidmap' and 'newgidmap' binaries
   # dbus-user-session is needed for userspace systemd
@@ -138,7 +151,7 @@ _containerd_rootless:
         # Set on restart
         profile_path="/etc/apparmor.d/${rootlesskit_path#/}"
         sudo mkdir -p "$(dirname "$profile_path")"
-        just _echo-yellow "Configuring AppArmor for rootlesskit at $rootlesskit_path"
+        just --justfile {{_self}} _echo-yellow "Configuring AppArmor for rootlesskit at $rootlesskit_path"
         {
           echo 'abi <abi/4.0>,'
           echo 'include <tunables/global>'
@@ -188,7 +201,7 @@ _containerd_rootless:
 _nerdctl_docker_alias:
   #!/usr/bin/env bash
   set -euo pipefail
-  just _echo-blue "Adding docker --> nerdctl alias to bashrc"
+  just --justfile {{_self}} _echo-blue "Adding docker --> nerdctl alias to bashrc"
 
   stargz_env_var='export CONTAINERD_SNAPSHOTTER="stargz"'
   docker_alias_cmd="alias docker='nerdctl'"
@@ -201,9 +214,9 @@ _nerdctl_docker_alias:
   done
 
   echo ""
-  just _echo-yellow "To use the 'docker' alias, login and log out."
-  just _echo-yellow "Or run:"
-  just _echo-yellow "    source ~/.bashrc"
+  just --justfile {{_self}} _echo-yellow "To use the 'docker' alias, login and log out."
+  just --justfile {{_self}} _echo-yellow "Or run:"
+  just --justfile {{_self}} _echo-yellow "    source ~/.bashrc"
 
 # Install container engine (NOTE: do not run as root!)
 [no-cd]
@@ -211,8 +224,25 @@ machine:
   #!/usr/bin/env bash
   set -euo pipefail
 
-  just prep _check_not_root
-  just prep _runc
-  just prep _nerdctl_containerd
-  just prep _containerd_rootless
-  just prep _nerdctl_docker_alias
+  just --justfile {{_self}} _check_not_root
+  just --justfile {{_self}} _runc
+  just --justfile {{_self}} _nerdctl_containerd
+  just --justfile {{_self}} _containerd_rootless
+  just --justfile {{_self}} _nerdctl_docker_alias
+
+# Install envsubst
+[no-cd]
+[no-exit-message]
+envsubst:
+  #!/usr/bin/env bash
+  echo
+  # Get a8m/envsubst (required for default vals syntax ${VAR:-default})
+  # Use local version, as envsubst may be installed on system already
+  if [ -f ./envsubst ]; then
+      echo "envsubst already exists. Continuing."
+  else
+      echo "Downloading a8m/envsubst"
+      echo
+      curl -L "https://github.com/a8m/envsubst/releases/download/v1.2.0/envsubst-$(uname -s)-$(uname -m)" -o envsubst
+      chmod +x envsubst
+  fi

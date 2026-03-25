@@ -1,6 +1,18 @@
-# Chart name - override from the importing justfile:
+# Standalone justfile - intended to be invoked via:
+#   just --justfile chart.just --set chart_name=my-app <recipe>
+#
+# Upstream repos should use a thin dispatcher pattern:
 #   chart_name := "my-app"
-#   import 'chart.just'
+#   chart *args: _ensure-chart
+#     @just --justfile {{justfile_directory()}}/chart.just --set chart_name={{chart_name}} {{args}}
+#   [private]
+#   _ensure-chart:
+#     @if [ ! -f {{justfile_directory()}}/chart.just ]; then \
+#       curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/chart.just \
+#         -o {{justfile_directory()}}/chart.just; \
+#     fi
+
+# Chart name - override via --set chart_name=my-app
 chart_name := "chart"
 
 # Publish the packaged chart to an OCI registry.
