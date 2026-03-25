@@ -3,11 +3,6 @@
 #   import 'chart.just'
 chart_name := "chart"
 
-# List available commands
-[private]
-default:
-  just --justfile {{justfile()}} --list chart
-
 # Publish the packaged chart to an OCI registry.
 # Registry URL is resolved in the script from env, not from Justfile interpolation.
 # Defaults to ghcr.io/<owner>/charts, which results in charts at ghcr.io/<owner>/charts/<chartname>

@@ -1,8 +1,3 @@
-# List available commands
-[private]
-default:
-  just --justfile {{justfile()}} --list prep
-
 [no-cd]
 _curl:
   #!/usr/bin/env bash
