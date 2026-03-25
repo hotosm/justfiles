@@ -2,16 +2,17 @@
 #   just --justfile prep.just <recipe>
 #
 # Upstream repos should use a thin dispatcher pattern:
-#   prep *args: _ensure-prep
-#     @just --justfile {{justfile_directory()}}/prep.just {{args}}
-#   [private]
-#   _ensure-prep:
-#     @if [ ! -f {{justfile_directory()}}/prep.just ]; then \
-#       curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/prep.just \
-#         -o {{justfile_directory()}}/prep.just; \
-#     fi
+#   prep *args:
+#     @curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/prep.just \
+#       -o {{justfile_directory()}}/tasks/prep.just;
+#     @just --justfile {{justfile_directory()}}/tasks/prep.just {{args}}
 
 _self := justfile()
+
+# List available recipes
+[private]
+default:
+  @just --justfile {{_self}} --list
 
 [private]
 [no-cd]

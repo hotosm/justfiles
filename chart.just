@@ -3,17 +3,23 @@
 #
 # Upstream repos should use a thin dispatcher pattern:
 #   chart_name := "my-app"
-#   chart *args: _ensure-chart
-#     @just --justfile {{justfile_directory()}}/chart.just --set chart_name={{chart_name}} {{args}}
-#   [private]
-#   _ensure-chart:
-#     @if [ ! -f {{justfile_directory()}}/chart.just ]; then \
-#       curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/chart.just \
-#         -o {{justfile_directory()}}/chart.just; \
-#     fi
+#   chart *args:
+#     @curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/chart.just \
+#       -o {{justfile_directory()}}/tasks/chart.just;
+#     @just --justfile {{justfile_directory()}}/tasks/chart.just \
+#       --set chart_name={{chart_name}} {{args}}
 
 # Chart name - override via --set chart_name=my-app
 chart_name := "chart"
+# Project root - resolves to where `just` was invoked, not where this file lives.
+# Override via --set project_dir=/path/to/repo if needed.
+project_dir := invocation_directory()
+_self := justfile()
+
+# List available recipes
+[private]
+default:
+  @just --justfile {{_self}} --list
 
 # Publish the packaged chart to an OCI registry.
 # Registry URL is resolved in the script from env, not from Justfile interpolation.
@@ -22,7 +28,7 @@ publish registry="": build
   #!/usr/bin/env bash
   set -e
 
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
 
   echo "🔐 Logging in to Helm registry..."
   # Resolve full registry path:
@@ -151,7 +157,7 @@ lint:
   #!/usr/bin/env sh
   set -e
 
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   echo "🔍 Linting chart..."
   helm lint chart
   echo "✓ Lint passed"
@@ -162,10 +168,10 @@ dependencies:
   #!/usr/bin/env sh
   set -e
 
-  cd {{justfile_directory()}}/chart
+  cd {{project_dir}}/chart
   echo "📥 Updating dependencies..."
   helm dependency update
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   echo "✓ Dependencies updated"
   echo ""
 
@@ -174,7 +180,7 @@ package:
   #!/usr/bin/env bash
   set -e
 
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   echo "📦 Packaging chart..."
   helm package chart
   PACKAGE=$(ls -t {{ chart_name }}-*.tgz | head -1)
@@ -186,14 +192,14 @@ package:
 template:
   #!/usr/bin/env bash
   set -e
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   helm template {{ chart_name }} chart
 
 # Show chart information
 show:
   #!/usr/bin/env bash
   set -e
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   helm show all chart
 
 # Clean up packaged charts
@@ -201,7 +207,7 @@ clean:
   #!/usr/bin/env bash
   set -e
 
-  cd {{justfile_directory()}}
+  cd {{project_dir}}
   rm -f {{ chart_name }}-*.tgz
   rm -rf ./chart/charts/
   echo "✓ Cleaned up chart artifacts"
