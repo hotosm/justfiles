@@ -1,11 +1,19 @@
 # Standalone justfile - intended to be invoked via:
-#   just --justfile prep.just <recipe>
+#   just --justfile prep.just nerdctl
+#   just --justfile prep.just docker
+#   just --justfile prep.just kubernetes
+#   just --justfile prep.just kubernetes
 #
 # Upstream repos should use a thin dispatcher pattern:
 #   prep *args:
 #     @curl -sS https://raw.githubusercontent.com/hotosm/justfiles/main/prep.just \
 #       -o {{justfile_directory()}}/tasks/prep.just;
 #     @just --justfile {{justfile_directory()}}/tasks/prep.just {{args}}
+#
+# Note that nerdctl support is experimental. In theory it has some improvements
+# over compose, such as faster rootless networking, but it does not support
+# sharing a network namespace between containers (needed for local dev):
+# https://github.com/containerd/nerdctl/issues/2833
 
 _self := justfile()
 
@@ -84,7 +92,7 @@ _runc:
 
   just --justfile {{_self}} _curl
 
-  VERSION=1.3.0
+  VERSION=1.4.2
   ARCH=$(just --justfile {{_self}} _get_arch)
   URL="https://github.com/opencontainers/runc/releases/download/v${VERSION}/runc.${ARCH}"
 
@@ -111,7 +119,7 @@ _nerdctl_containerd:
   just --justfile {{_self}} _curl
 
   just --justfile {{_self}} _echo-blue "Installing high level container runtime: containerd + nerdctl CLI"
-  VERSION=2.2.1
+  VERSION=2.2.2
   ARCH=$(just --justfile {{_self}} _get_arch)
   URL="https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
 
@@ -219,9 +227,9 @@ _nerdctl_docker_alias:
   just --justfile {{_self}} _echo-yellow "Or run:"
   just --justfile {{_self}} _echo-yellow "    source ~/.bashrc"
 
-# Install container engine (NOTE: do not run as root!)
+# Install nerdctl container engine (NOTE: do not run as root!)
 [no-cd]
-machine:
+nerdctl:
   #!/usr/bin/env bash
   set -euo pipefail
 
@@ -230,6 +238,90 @@ machine:
   just --justfile {{_self}} _nerdctl_containerd
   just --justfile {{_self}} _containerd_rootless
   just --justfile {{_self}} _nerdctl_docker_alias
+
+# Install Docker Engine + Docker Compose (NOTE: do not run as root!)
+[no-cd]
+docker:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  just --justfile {{_self}} _check_not_root
+  just --justfile {{_self}} _curl
+
+  if command -v docker &> /dev/null; then
+    just --justfile {{_self}} _echo-yellow "Docker is already installed."
+    docker --version
+    exit 0
+  fi
+
+  just --justfile {{_self}} _echo-blue "Installing Docker Engine + Docker Compose via official convenience script"
+
+  TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  curl -fsSL https://get.docker.com -o "$TMP_DIR/get-docker.sh"
+  sudo sh "$TMP_DIR/get-docker.sh"
+
+  # Add current user to docker group so we can run without sudo
+  just --justfile {{_self}} _echo-blue "Adding current user to 'docker' group"
+  sudo usermod -aG docker "$(id -un)"
+
+  # Enable and start Docker service
+  sudo systemctl enable docker
+  sudo systemctl start docker
+
+  echo ""
+  just --justfile {{_self}} _echo-yellow "Docker installed successfully."
+  docker --version
+  echo ""
+  just --justfile {{_self}} _echo-yellow "You may need to log out and back in for the docker group to take effect."
+  just --justfile {{_self}} _echo-yellow "Or run:"
+  just --justfile {{_self}} _echo-yellow "    newgrp docker"
+
+# Install k3s Kubernetes distribution (NOTE: do not run as root!)
+[no-cd]
+kubernetes:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  just --justfile {{_self}} _check_not_root
+  just --justfile {{_self}} _curl
+
+  if command -v k3s &> /dev/null; then
+    just --justfile {{_self}} _echo-yellow "k3s is already installed."
+    k3s --version
+    exit 0
+  fi
+
+  K3S_VERSION="v1.35.3+k3s1"
+  just --justfile {{_self}} _echo-blue "Installing k3s ${K3S_VERSION}"
+
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${K3S_VERSION}" sh -
+
+  # Allow current user to access kubeconfig without sudo
+  just --justfile {{_self}} _echo-blue "Configuring kubeconfig access for current user"
+  sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+
+  # Set up KUBECONFIG in bashrc
+  kubeconfig_line='export KUBECONFIG="/etc/rancher/k3s/k3s.yaml"'
+  if ! grep -Fxq "$kubeconfig_line" ~/.bashrc; then
+    echo "$kubeconfig_line" >> ~/.bashrc
+  fi
+
+  # Install kubectl alias if kubectl is not already present
+  if ! command -v kubectl &> /dev/null; then
+    kubectl_alias='alias kubectl="k3s kubectl"'
+    if ! grep -Fxq "$kubectl_alias" ~/.bashrc; then
+      echo "$kubectl_alias" >> ~/.bashrc
+    fi
+  fi
+
+  echo ""
+  just --justfile {{_self}} _echo-yellow "k3s installed successfully."
+  k3s --version
+  echo ""
+  just --justfile {{_self}} _echo-yellow "To use kubectl, log out and back in, or run:"
+  just --justfile {{_self}} _echo-yellow "    source ~/.bashrc"
 
 # Install envsubst
 [no-cd]
