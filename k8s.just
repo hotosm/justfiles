@@ -39,6 +39,14 @@ node_labels := "node-type=cpu,karpenter.sh/capacity-type=spot"
 # Configure Argo to archive workflow pod logs to S3 ("true" | "false"). Requires
 # the archive bucket to exist in the target S3. See archive_* variables below.
 archive_logs := "true"
+# Optional dynamic storage provisioner. "" installs none (Talos ships no default
+# StorageClass); "local-path" installs Rancher local-path-provisioner and marks
+# it the default StorageClass so workflows using PVCs / volumeClaimTemplates can
+# bind on the single local worker. Needed by pipelines that share a PVC across
+# steps (e.g. OpenAerialMap's multi-pod DAG); ScaleODM uses emptyDir locally and
+# leaves this "".
+storage_provisioner := ""
+local_path_version := env("LOCAL_PATH_PROVISIONER_VERSION", "v0.0.30")
 
 # Talos node sizing (Docker provider).
 control_plane_memory := env("TALOS_CONTROL_PLANE_MEMORY", "2.0GiB")
@@ -221,6 +229,9 @@ cluster-init: _install-tools
   ARGO_ARCHIVE_S3_PORT="{{archive_s3_port}}"
   ARGO_ARCHIVE_S3_INSECURE="{{archive_s3_insecure}}"
 
+  STORAGE_PROVISIONER="{{storage_provisioner}}"
+  LOCAL_PATH_VERSION="{{local_path_version}}"
+
   # Resolve the Argo install manifest for the requested scope.
   case "$ARGO_SCOPE" in
       cluster)   ARGO_MANIFEST="install.yaml" ;;
@@ -244,6 +255,36 @@ cluster-init: _install-tools
               --clusterrole=admin --serviceaccount="$NAMESPACE:$SERVICE_ACCOUNT" \
               --dry-run=client -o yaml | kubectl apply -f - &> /dev/null
       fi
+  }
+
+  # Install a default StorageClass so PVCs / volumeClaimTemplates can bind. Talos
+  # in Docker ships no provisioner, so pipelines that share a PVC across steps
+  # would otherwise sit Pending forever. local-path binds a node-local hostPath
+  # and ignores the requested size, which suits the single-worker test cluster.
+  install_storage_provisioner() {
+      [ "$STORAGE_PROVISIONER" = "local-path" ] || return 0
+      if ! kubectl -n local-path-storage get deploy local-path-provisioner &> /dev/null; then
+          echo "📦 Installing local-path-provisioner ($LOCAL_PATH_VERSION)..."
+          kubectl apply -f "https://raw.githubusercontent.com/rancher/local-path-provisioner/${LOCAL_PATH_VERSION}/deploy/local-path-storage.yaml"
+      fi
+      # Talos gotchas (apply every run, idempotent):
+      #  - Talos mounts the rootfs read-only except /var, so the provisioner's
+      #    default /opt/local-path-provisioner path can't be created. Repoint it
+      #    under /var and restart so the change takes effect.
+      #  - the helper pod mounts a hostPath, so the namespace needs the
+      #    privileged Pod Security level.
+      kubectl label namespace local-path-storage \
+          pod-security.kubernetes.io/enforce=privileged --overwrite &> /dev/null || true
+      kubectl -n local-path-storage patch configmap local-path-config --type merge \
+          -p '{"data":{"config.json":"{\n  \"nodePathMap\":[\n    {\"node\":\"DEFAULT_PATH_FOR_NON_LISTED_NODES\",\"paths\":[\"/var/local-path-provisioner\"]}\n  ]\n}"}}' \
+          &> /dev/null || true
+      kubectl -n local-path-storage rollout restart deploy/local-path-provisioner &> /dev/null || true
+      kubectl -n local-path-storage rollout status deploy/local-path-provisioner --timeout=3m || true
+      # Mark local-path the default StorageClass (idempotent).
+      kubectl patch storageclass local-path \
+          -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' \
+          &> /dev/null || true
+      echo "✓ local-path is the default StorageClass (path: /var/local-path-provisioner)"
   }
 
   # (Re)create the workflow S3 credentials secret read by workflow pods.
@@ -365,6 +406,7 @@ cluster-init: _install-tools
               echo "📦 Verifying workflow S3 credentials secret..."
               apply_s3_secret
               echo "✓ Workflow S3 credentials secret verified"
+              install_storage_provisioner
               label_workflow_nodes
               configure_argo_archive_logs
               echo ""
@@ -419,6 +461,7 @@ cluster-init: _install-tools
   bind_service_account
   echo "📦 Setting up workflow S3 credentials secret..."
   apply_s3_secret
+  install_storage_provisioner
   label_workflow_nodes
   configure_argo_archive_logs
 
