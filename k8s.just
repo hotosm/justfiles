@@ -240,6 +240,37 @@ cluster-init: _install-tools
   esac
   ARGO_URL="https://github.com/argoproj/argo-workflows/releases/download/${ARGO_VERSION}/${ARGO_MANIFEST}"
 
+  # The cluster-scope manifest hardcodes namespace "argo" on its namespaced
+  # objects and RoleBinding subjects, so it can only be applied there. Fail fast
+  # with a clear message instead of a cryptic mid-run apply error.
+  if [ "$ARGO_SCOPE" = "cluster" ] && [ "$NAMESPACE" != "argo" ]; then
+      echo "❌ argo_scope=cluster installs Argo into namespace 'argo' (the upstream"
+      echo "   manifest hardcodes it), but namespace is '$NAMESPACE'."
+      echo "   Use namespace=argo, or switch to argo_scope=namespace."
+      exit 1
+  fi
+
+  # Ensure the Argo control plane is present in $NAMESPACE (idempotent). Keyed on
+  # the workflow-controller Deployment, not the cluster-scoped CRD, so a cluster
+  # left with CRDs but no controller (e.g. a half-failed install) is repaired
+  # rather than skipped.
+  #
+  # NOTE: the upstream cluster manifest (install.yaml) hardcodes `namespace: argo`
+  # on its namespaced objects and RoleBinding subjects, so a cluster-scope install
+  # must use namespace "argo" (a plain `apply -n <other>` is rejected). Where the
+  # operator lives is a deployment choice; the local test just uses "argo".
+  ensure_argo_installed() {
+      if kubectl -n "$NAMESPACE" get deploy workflow-controller &> /dev/null; then
+          echo "✓ Argo Workflows already installed in $NAMESPACE"
+          return 0
+      fi
+      echo "📦 Installing Argo Workflows $ARGO_VERSION ($ARGO_SCOPE scope) into $NAMESPACE..."
+      kubectl apply -n "$NAMESPACE" -f "$ARGO_URL"
+      echo "⏳ Waiting for Argo Workflows to be ready..."
+      kubectl -n "$NAMESPACE" rollout status deploy/workflow-controller --timeout=5m || true
+      kubectl -n "$NAMESPACE" rollout status deploy/argo-server --timeout=5m || true
+  }
+
   # Bind the workflow ServiceAccount to the built-in `admin` role. Cluster scope
   # uses a ClusterRoleBinding (workflows may run in any namespace); namespace
   # scope uses a namespaced RoleBinding (no cluster-scoped RBAC granted).
@@ -396,23 +427,25 @@ cluster-init: _install-tools
               && echo "✓ Namespace '$NAMESPACE' exists" \
               || echo "⚠️  Namespace '$NAMESPACE' missing, will create"
 
-          if kubectl get crd workflows.argoproj.io &> /dev/null && kubectl get namespace "$NAMESPACE" &> /dev/null; then
-              echo "✓ Argo Workflows CRD exists"
-              echo ""
-              echo "✅ Cluster already configured - reconciling prerequisites..."
-              echo "📦 Verifying service account and RBAC..."
-              bind_service_account
-              echo "✓ Service account and RBAC verified"
-              echo "📦 Verifying workflow S3 credentials secret..."
-              apply_s3_secret
-              echo "✓ Workflow S3 credentials secret verified"
-              install_storage_provisioner
-              label_workflow_nodes
-              configure_argo_archive_logs
-              echo ""
-              exit 0
-          fi
-          echo "⚠️  Argo Workflows not fully installed, continuing setup..."
+          # Cluster is up and reachable: reconcile everything idempotently and
+          # exit. Do not fall through to `talosctl cluster create` (which would
+          # fail on an existing cluster).
+          kubectl get namespace "$NAMESPACE" &> /dev/null || {
+              echo "📦 Creating namespace: $NAMESPACE"; kubectl create namespace "$NAMESPACE"; }
+          echo ""
+          echo "✅ Cluster present - reconciling prerequisites..."
+          ensure_argo_installed
+          echo "📦 Verifying service account and RBAC..."
+          bind_service_account
+          echo "✓ Service account and RBAC verified"
+          echo "📦 Verifying workflow S3 credentials secret..."
+          apply_s3_secret
+          echo "✓ Workflow S3 credentials secret verified"
+          install_storage_provisioner
+          label_workflow_nodes
+          configure_argo_archive_logs
+          echo ""
+          exit 0
       fi
   fi
 
@@ -447,15 +480,7 @@ cluster-init: _install-tools
   kubectl get namespace "$NAMESPACE" &> /dev/null || {
       echo "📦 Creating namespace: $NAMESPACE"; kubectl create namespace "$NAMESPACE"; }
 
-  if ! kubectl get crd workflows.argoproj.io &> /dev/null; then
-      echo "📦 Installing Argo Workflows $ARGO_VERSION ($ARGO_SCOPE scope)..."
-      kubectl apply -n "$NAMESPACE" -f "$ARGO_URL"
-      echo "⏳ Waiting for Argo Workflows to be ready..."
-      kubectl wait --for=condition=ready pod -l app=workflow-controller -n "$NAMESPACE" --timeout=5m || true
-      kubectl wait --for=condition=ready pod -l app=argo-server -n "$NAMESPACE" --timeout=5m || true
-  else
-      echo "✓ Argo Workflows already installed"
-  fi
+  ensure_argo_installed
 
   echo "📦 Setting up workflow service account and RBAC..."
   bind_service_account
