@@ -47,6 +47,13 @@ archive_logs := "true"
 # leaves this "".
 storage_provisioner := ""
 local_path_version := env("LOCAL_PATH_PROVISIONER_VERSION", "v0.0.30")
+# Optional containerd registry mirrors as space-separated "host=url" specs,
+# passed to `talosctl cluster create` as --registry-mirror. Lets the cluster pull
+# images from a local registry (e.g. locally-built pipeline images) instead of a
+# public one, without editing any image references. Baked in at cluster-create
+# time. Example (10.5.0.1 is the fixed Talos docker gateway = the host):
+#   "ghcr.io=http://10.5.0.1:5005"
+registry_mirrors := ""
 
 # Talos node sizing (Docker provider).
 control_plane_memory := env("TALOS_CONTROL_PLANE_MEMORY", "2.0GiB")
@@ -231,6 +238,7 @@ cluster-init: _install-tools
 
   STORAGE_PROVISIONER="{{storage_provisioner}}"
   LOCAL_PATH_VERSION="{{local_path_version}}"
+  REGISTRY_MIRRORS="{{registry_mirrors}}"
 
   # Resolve the Argo install manifest for the requested scope.
   case "$ARGO_SCOPE" in
@@ -456,6 +464,19 @@ cluster-init: _install-tools
   # Talos multi-document machine config.
   KUBELET_PATCH=$'machine:\n  kubelet:\n    extraConfig:\n      evictionHard:\n        nodefs.available: "5%"\n        imagefs.available: "5%"'
 
+  # Turn the "host=url" specs into a machine.registries.mirrors config patch
+  # (the docker provider has no --registry-mirror flag; it's plain machine
+  # config). Empty REGISTRY_MIRRORS -> no extra patch.
+  REGISTRY_PATCH_FLAGS=()
+  if [ -n "$REGISTRY_MIRRORS" ]; then
+      REGISTRY_PATCH=$'machine:\n  registries:\n    mirrors:'
+      for m in $REGISTRY_MIRRORS; do
+          mhost="${m%%=*}"; murl="${m#*=}"
+          REGISTRY_PATCH+=$'\n'"      ${mhost}:"$'\n'"        endpoints:"$'\n'"          - ${murl}"
+      done
+      REGISTRY_PATCH_FLAGS=(--config-patch "$REGISTRY_PATCH")
+  fi
+
   talosctl cluster create docker \
     --name "$CLUSTER_NAME" \
     --workers 1 \
@@ -463,7 +484,8 @@ cluster-init: _install-tools
     --memory-workers "${WORKER_MEMORY}" \
     --cpus-controlplanes "${CONTROL_PLANE_CPUS}" \
     --cpus-workers "${WORKER_CPUS}" \
-    --config-patch "$KUBELET_PATCH"
+    --config-patch "$KUBELET_PATCH" \
+    "${REGISTRY_PATCH_FLAGS[@]}"
 
   echo "📦 Merging kubeconfig from cluster..."
   talosctl kubeconfig --nodes "$CP_IP" --force
