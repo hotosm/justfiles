@@ -162,18 +162,6 @@ _install-tools: _install-curl _install-jq _install-talosctl _install-kubectl
 
 # --- Cluster reachability ---------------------------------------------------
 
-# Check whether a Kubernetes cluster is reachable (exit 0 if so). Private.
-[private]
-[no-cd]
-_check-cluster:
-  #!/usr/bin/env bash
-  set +e
-  T="${KUBECTL_TIMEOUT:-5s}"
-  command -v kubectl &> /dev/null || exit 1
-  kubectl --request-timeout="$T" cluster-info &> /dev/null || exit 1
-  kubectl --request-timeout="$T" get nodes &> /dev/null || exit 1
-  exit 0
-
 # Print the Talos docker network gateway IP (host address reachable from pods).
 [no-cd]
 gateway-ip:
@@ -197,8 +185,12 @@ cluster-available: _report-cluster-status cluster-init
 _report-cluster-status:
   #!/usr/bin/env bash
   set +e
+  T="${KUBECTL_TIMEOUT:-5s}"
   echo "Checking for Kubernetes cluster..."
-  if KUBECTL_TIMEOUT="${KUBECTL_TIMEOUT:-5s}" just --justfile {{_self}} _check-cluster; then
+
+  if command -v kubectl &> /dev/null \
+     && kubectl --request-timeout="$T" cluster-info &> /dev/null \
+     && kubectl --request-timeout="$T" get nodes &> /dev/null; then
       echo "✓ Kubernetes cluster is available; reconciling prerequisites..."
   else
       echo "⚠️  Kubernetes cluster not available; initialising (this may take a few minutes)..."
