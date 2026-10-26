@@ -145,7 +145,10 @@ _install-kubectl:
   command -v kubectl &> /dev/null && exit 0
   echo "📦 Installing kubectl..."
   KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-  curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  ARCH=$(uname -m)
+  case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; esac
+  curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/$OS/$ARCH/kubectl"
   chmod +x kubectl
   if sudo mv kubectl /usr/local/bin/kubectl 2>/dev/null; then
       echo "✓ kubectl installed to /usr/local/bin"
@@ -391,7 +394,9 @@ cluster-init: _install-tools
   echo ""
 
   # br_netfilter is required for Flannel networking in the Docker provider.
-  if ! lsmod | grep -q "^br_netfilter"; then
+  if [ "$(uname -s)" != "Linux" ]; then
+      echo "  Skipping br_netfilter check (non-Linux host such as MacOS)"
+  elif ! lsmod | grep -q "^br_netfilter"; then
       echo "📦 Loading br_netfilter kernel module..."
       sudo modprobe br_netfilter 2>/dev/null \
           && echo "✓ br_netfilter loaded" \
